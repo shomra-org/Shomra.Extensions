@@ -1,0 +1,97 @@
+{
+  "name": "shomra",
+  "displayName": "Shomra — AI Security",
+  "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) right in your editor. Works in VS Code and Cursor.",
+  "version": "0.1.0",
+  "publisher": "shomra",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai security",
+    "mcp",
+    "prompt injection",
+    "claude",
+    "cursor"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Shomra runs the local `shomra` CLI, so it only activates in trusted workspaces."
+    }
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "shomra.checkWorkspace",
+        "title": "Check Workspace",
+        "category": "Shomra"
+      },
+      {
+        "command": "shomra.checkFile",
+        "title": "Check This File",
+        "category": "Shomra"
+      },
+      {
+        "command": "shomra.fixFile",
+        "title": "Fix This File (AI)",
+        "category": "Shomra"
+      },
+      {
+        "command": "shomra.explainFile",
+        "title": "Explain Findings (AI)",
+        "category": "Shomra"
+      },
+      {
+        "command": "shomra.installHook",
+        "title": "Install Runtime Firewall",
+        "category": "Shomra"
+      }
+    ],
+    "configuration": {
+      "title": "Shomra",
+      "properties": {
+        "shomra.executable": {
+          "type": "string",
+          "default": "shomra",
+          "markdownDescription": "The `shomra` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/Dragox.Backend/agent/shomra.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
+        },
+        "shomra.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Shomra when you save an AI-artifact file (MCP config, Skill, rules, hook, …)."
+        },
+        "shomra.checkOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Shomra when you open an AI-artifact file."
+        },
+        "shomra.checkWorkspaceOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Scan the whole workspace once when the window opens. Off by default so large repos don't pay it on every launch."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.5"
+  }
+}
