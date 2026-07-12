@@ -17,10 +17,17 @@ one engine, two faces.
 - **Explain a finding.** `Shomra: Explain findings (AI)` distils each finding into
   why-it-matters + a one-line exploit + an honest false-positive read (Output →
   Shomra) — for when you think the gate is wrong.
+- **Known-vulnerable model detection.** As you save Python, notebooks, or JS/TS,
+  the extension scans for AI models you load (`from_pretrained("gpt2")`,
+  `hf_hub_download`, `SentenceTransformer`, …) and looks each up in the **Shomra
+  Model Index**. Models with known vulnerabilities get a squiggle **on the load
+  line** — with the verdict, risk and CWEs — and a `View model in the Model Index`
+  quick-fix that opens its security page. Both the bare (`gpt2`) and canonical
+  (`openai-community/gpt2`) ids resolve. Toggle with `shomra.checkModels`.
 - **Status bar.** Shows `⛨ Shomra` / `N blocked` for the workspace; click to
   re-scan everything.
 - **Commands** (`Ctrl/Cmd-Shift-P` → "Shomra"): Check Workspace, Check This File,
-  Fix This File, Install Runtime Firewall.
+  Check AI Models in This File, Fix This File, Install Runtime Firewall.
 
 ## Requirements
 

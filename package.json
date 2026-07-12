@@ -1,8 +1,8 @@
 {
   "name": "shomra",
   "displayName": "Shomra — AI Security",
-  "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) right in your editor. Works in VS Code and Cursor.",
-  "version": "0.1.0",
+  "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) and flag known-vulnerable AI models right in your editor. Works in VS Code and Cursor.",
+  "version": "0.3.0",
   "publisher": "shomra",
   "engines": {
     "vscode": "^1.75.0"
@@ -42,6 +42,16 @@
         "category": "Shomra"
       },
       {
+        "command": "shomra.checkModelsFile",
+        "title": "Check AI Models in This File",
+        "category": "Shomra"
+      },
+      {
+        "command": "shomra.hardenModelLoad",
+        "title": "Harden AI Model Load",
+        "category": "Shomra"
+      },
+      {
         "command": "shomra.fixFile",
         "title": "Fix This File (AI)",
         "category": "Shomra"
@@ -74,6 +84,11 @@
           "type": "boolean",
           "default": true,
           "description": "Run Shomra when you open an AI-artifact file."
+        },
+        "shomra.checkModels": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan source files (Python, notebooks, JS/TS) for AI models you load and flag any that are known-vulnerable in the Shomra Model Index — squiggled on the model-load line, on save and open."
         },
         "shomra.checkWorkspaceOnStartup": {
           "type": "boolean",
