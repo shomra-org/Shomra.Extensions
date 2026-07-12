@@ -45,7 +45,7 @@ node C:/Users/you/…/Dragox/Dragox.Backend/agent/shomra.mjs
 ```
 
 (A value ending in `.mjs`/`.js` is run with Node automatically.) `Fix This File`
-additionally needs enrollment (`shomra init --key dgx_live_…`), because the AI
+additionally needs enrollment (`shomra init --key shm_live_…`), because the AI
 fix is generated on the platform with your org key — no provider key ever sits
 on the dev machine.
 
