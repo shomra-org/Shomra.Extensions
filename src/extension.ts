@@ -54,6 +54,9 @@ type Kwarg = { name: string; value: string; reason: string };
 // Per-file, per-(0-based)line remediation plan from the last `shomra models` run,
 // so the "Harden this model load" quick-fix knows which kwargs to offer.
 const modelFixByUri = new Map<string, Map<number, { id: string; kwargs: Kwarg[] }>>();
+// Document version last scanned per file uri, so opening/focusing an already-
+// scanned tab doesn't respawn the CLI. A save always forces a fresh scan.
+const lastScanned = new Map<string, number>();
 let status: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
 let warnedMissing = false;
@@ -92,13 +95,16 @@ export function activate(context: vscode.ExtensionContext) {
   // (checkFile) and the model-index lookup (checkModelRefs), each scoped to the
   // file types it understands.
   context.subscriptions.push(
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (cfg<boolean>('checkOnSave', true)) checkFile(doc);
-      if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
-    }),
-    vscode.workspace.onDidOpenTextDocument((doc) => {
-      if (cfg<boolean>('checkOnOpen', true)) checkFile(doc);
-      if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
+    // Save is the primary loop — content just changed, so always re-scan.
+    vscode.workspace.onDidSaveTextDocument((doc) => ambientCheck(doc, { force: true, gate: 'checkOnSave' })),
+    // Opening a file scans it right away…
+    vscode.workspace.onDidOpenTextDocument((doc) => ambientCheck(doc)),
+    // …and so does switching to it. onDidOpen does NOT fire for a tab that's
+    // already open (or restored from a previous session), so without this the
+    // check would appear to run "only on save." Version-guarded, so flipping
+    // between unchanged tabs is a no-op.
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
+      if (editor?.document) ambientCheck(editor.document);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => {
       // Keep diagnostics for saved files; only drop untitled scratch buffers.
@@ -106,6 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
         diagnostics.delete(doc.uri);
         modelDiags.delete(doc.uri);
       }
+      lastScanned.delete(doc.uri.toString());
     }),
   );
 
@@ -118,11 +125,10 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
-  // Check whatever files are already open, plus an optional full sweep.
-  for (const doc of vscode.workspace.textDocuments) {
-    checkFile(doc);
-    if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
-  }
+  // Check whatever files are already open (incl. the focused one), plus an
+  // optional full sweep.
+  for (const doc of vscode.workspace.textDocuments) ambientCheck(doc);
+  if (vscode.window.activeTextEditor?.document) ambientCheck(vscode.window.activeTextEditor.document);
   if (cfg<boolean>('checkWorkspaceOnStartup', false)) checkWorkspace();
 }
 
@@ -135,6 +141,21 @@ export function deactivate() {
 
 function cfg<T>(key: string, def: T): T {
   return vscode.workspace.getConfiguration('shomra').get<T>(key, def);
+}
+
+/**
+ * Run the ambient checks (artifact gate + model-index lookup) for a document.
+ * Runs at most once per (uri, document version) unless `force`, so opening or
+ * focusing an unchanged tab doesn't respawn the CLI. `gate` selects which on/off
+ * setting applies — `checkOnOpen` for open/focus, `checkOnSave` for saves.
+ */
+function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 'checkOnOpen' | 'checkOnSave' } = {}) {
+  if (doc.uri.scheme !== 'file') return;
+  const key = doc.uri.toString();
+  if (!opts.force && lastScanned.get(key) === doc.version) return;
+  lastScanned.set(key, doc.version);
+  if (cfg<boolean>(opts.gate ?? 'checkOnOpen', true)) checkFile(doc);
+  if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
 }
 
 /** Resolve `shomra.executable` into a spawnable command + leading args. */
