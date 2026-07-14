@@ -4,6 +4,15 @@
   "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) and flag known-vulnerable AI models right in your editor. Works in VS Code and Cursor.",
   "version": "0.3.1",
   "publisher": "shomra",
+  "license": "Apache-2.0",
+  "homepage": "https://shomra.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davidkeso/Dragox.Extension.git"
+  },
+  "bugs": {
+    "url": "https://github.com/davidkeso/Dragox.Extension/issues"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
