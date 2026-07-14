@@ -31,14 +31,13 @@ one engine, two faces.
 
 ## Requirements
 
-The `shomra` CLI must be on your PATH:
+**None — the extension bundles the `shomra` CLI and runs it with VS Code's own
+Node runtime.** Install it and it works; there's nothing to set up.
 
-```bash
-npm i -g @shomra/agent      # provides the global `shomra`
-```
-
-Working against this repo instead of the published package? Point the extension
-at the checked-in script — **Settings → `shomra.executable`**:
+If you *do* have a global `shomra` on your PATH (e.g. `npm i -g @shomra/agent`,
+enrolled with your org key), the extension prefers it automatically so enrolled
+and org-policy features light up. To pin a specific build instead, point
+**Settings → `shomra.executable`** at a script:
 
 ```
 node C:/Users/you/…/Dragox/Dragox.Backend/agent/shomra.mjs

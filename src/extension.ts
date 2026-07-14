@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 
 const SOURCE = 'Shomra';
 
@@ -158,6 +159,22 @@ function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 
   if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
 }
 
+/**
+ * Absolute path to the CLI bundled inside the extension (`cli/shomra.mjs`), or
+ * null if this build didn't ship it. This is the zero-install fallback: when the
+ * user has no global `shomra` on PATH, we run the bundled copy with VS Code's own
+ * Node runtime, so the extension works out of the box with nothing to set up.
+ * Built at `out/extension.js`, so the CLI sits one level up in `cli/`.
+ */
+function bundledCli(): string | null {
+  const p = path.join(__dirname, '..', 'cli', 'shomra.mjs');
+  try {
+    return fs.existsSync(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Resolve `shomra.executable` into a spawnable command + leading args. */
 function invocation(): { cmd: string; base: string[]; asNode: boolean } {
   const exe = cfg<string>('executable', 'shomra').trim();
@@ -175,13 +192,26 @@ function invocation(): { cmd: string; base: string[]; asNode: boolean } {
  * is NORMAL — we resolve with the code and parse stdout regardless; only a
  * missing binary rejects.
  */
-function runShomra(args: string[], cwd: string): Promise<{ code: number; stdout: string; stderr: string }> {
-  const { cmd, base, asNode } = invocation();
+function runShomra(
+  args: string[],
+  cwd: string,
+  viaBundled = false,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  // Normal path uses `shomra.executable` (PATH or a user-set script). If that
+  // command isn't found, we retry once against the CLI bundled in the extension
+  // (viaBundled) so a fresh install just works — a global `shomra`, when present,
+  // still wins so enrolled/org features keep working.
+  const bundled = bundledCli();
+  const { cmd, base, asNode } = viaBundled
+    ? { cmd: process.execPath, base: [bundled as string], asNode: true }
+    : invocation();
   const argv = [...base, ...args];
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1' };
   // Make the Electron host binary run our .mjs as a plain Node script.
   if (asNode) env.ELECTRON_RUN_AS_NODE = '1';
-  output.appendLine(`$ ${asNode ? '[node] ' : cmd + ' '}${argv.join(' ')}   (cwd: ${cwd})`);
+  output.appendLine(
+    `$ ${asNode ? '[node] ' : cmd + ' '}${argv.join(' ')}   (cwd: ${cwd}${viaBundled ? ', bundled' : ''})`,
+  );
   return new Promise((resolve, reject) => {
     execFile(
       cmd,
@@ -189,6 +219,11 @@ function runShomra(args: string[], cwd: string): Promise<{ code: number; stdout:
       { cwd, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env },
       (err: any, stdout, stderr) => {
         if (err && (err.code === 'ENOENT' || err.errno === -4058 || err.errno === 'ENOENT')) {
+          // Configured command missing → fall back to the bundled CLI once.
+          if (!viaBundled && bundled) {
+            runShomra(args, cwd, true).then(resolve, reject);
+            return;
+          }
           reject(new ShomraNotFound());
           return;
         }
@@ -218,9 +253,12 @@ function handleRunError(e: unknown) {
     if (warnedMissing) return;
     warnedMissing = true;
     const exe = cfg<string>('executable', 'shomra');
+    // The extension ships the CLI, so this only fires if the bundle is missing or
+    // a user pointed `shomra.executable` at a bad path. Offer settings, not a
+    // mandatory install — the bundled CLI is meant to make setup unnecessary.
     vscode.window
       .showWarningMessage(
-        `Shomra CLI not found (tried "${exe}"). Set "shomra.executable" to the full path of shomra.mjs, or install \`npm i -g @shomra/agent\`. Then reload the window.`,
+        `Shomra couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected — reload the window, or set "shomra.executable" to a shomra.mjs path if you meant to use your own.`,
         'Open Settings',
       )
       .then((pick) => {

@@ -2,8 +2,9 @@
   "name": "shomra",
   "displayName": "Shomra — AI Security",
   "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) and flag known-vulnerable AI models right in your editor. Works in VS Code and Cursor.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "shomra",
+  "icon": "icon.png",
   "license": "Apache-2.0",
   "homepage": "https://shomra.ai",
   "repository": {
@@ -17,17 +18,32 @@
     "vscode": "^1.75.0"
   },
   "categories": [
+    "AI",
     "Linters",
-    "Programming Languages",
-    "Other"
+    "Testing"
   ],
   "keywords": [
     "ai security",
+    "security",
     "mcp",
+    "model context protocol",
     "prompt injection",
+    "llm",
+    "sast",
+    "static analysis",
+    "secrets",
+    "vulnerability",
+    "supply chain",
     "claude",
-    "cursor"
+    "cursor",
+    "copilot",
+    "ai agent",
+    "devsecops"
   ],
+  "galleryBanner": {
+    "color": "#0e3a3d",
+    "theme": "dark"
+  },
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
@@ -108,7 +124,8 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run bundle:cli && npm run compile",
+    "bundle:cli": "node ./scripts/bundle-cli.mjs",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package"

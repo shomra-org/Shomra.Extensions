@@ -10,3 +10,4 @@ playground/**
 *.vsix
 package-lock.json
 .git/**
+scripts/**
