@@ -1,0 +1,68 @@
+name: Release extension
+
+# Every push to main (= every merge) pulls the latest @shomra/agent CLI, bumps
+# the extension's patch version, then publishes to BOTH marketplaces:
+#   - VS Code Marketplace (vsce)   -> needs secret VSCE_PAT  (Azure DevOps PAT, Marketplace>Manage)
+#   - Open VSX / Cursor    (ovsx)  -> needs secret OVSX_TOKEN (open-vsx.org token)
+# The bump commit is marked [skip ci] so it does not retrigger this workflow.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release-ext
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci
+
+      # Always bundle the newest published CLI so the extension ships current code.
+      - name: Track latest @shomra/agent
+        run: npm install @shomra/agent@latest --save
+
+      - name: Configure git
+        run: |
+          git config user.name "shomra-ci"
+          git config user.email "ci@shomra.ai"
+
+      - name: Bump version
+        run: |
+          npm version patch --no-git-tag-version
+          echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
+      # vscode:prepublish (bundle:cli + compile) runs inside `vsce package`.
+      - name: Package .vsix
+        run: npx --yes @vscode/vsce package -o "shomra-$VERSION.vsix"
+
+      - name: Publish to VS Code Marketplace
+        run: npx --yes @vscode/vsce publish --packagePath "shomra-$VERSION.vsix"
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX (Cursor)
+        run: npx --yes ovsx publish "shomra-$VERSION.vsix" -p "$OVSX_TOKEN"
+        env:
+          OVSX_TOKEN: ${{ secrets.OVSX_TOKEN }}
+
+      - name: Commit bump + tag
+        run: |
+          git add -A
+          git commit -m "chore: release v$VERSION [skip ci]"
+          git tag "v$VERSION"
+          git push --follow-tags
