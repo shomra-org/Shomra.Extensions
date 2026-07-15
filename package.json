@@ -98,7 +98,7 @@
         "shomra.executable": {
           "type": "string",
           "default": "shomra",
-          "markdownDescription": "The `shomra` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/Dragox.Backend/agent/shomra.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
+          "markdownDescription": "The `shomra` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/Shomra.Agent/shomra.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
         },
         "shomra.checkOnSave": {
           "type": "boolean",

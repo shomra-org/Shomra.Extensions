@@ -30,7 +30,9 @@ try {
 const pkg = JSON.parse(readFileSync(join(cliSrc, 'package.json'), 'utf8'));
 // Bundle exactly what the package publishes (its `files`) minus docs we don't
 // need at runtime; shomra.mjs + its sibling .mjs modules are what actually run.
-const FILES = ['shomra.mjs', 'discovery.mjs', 'guard-signals.mjs', 'code-sast.mjs', 'model-refs.mjs', 'LICENSE', 'NOTICE'];
+// package.json is REQUIRED at runtime, not just metadata: shomra.mjs reads its
+// own version from it, so omitting it makes the bundled CLI report 0.0.0.
+const FILES = ['shomra.mjs', 'discovery.mjs', 'guard-signals.mjs', 'code-sast.mjs', 'model-refs.mjs', 'package.json', 'LICENSE', 'NOTICE'];
 
 if (!existsSync(join(cliSrc, 'shomra.mjs'))) {
   console.error(`[bundle-cli] shomra.mjs not found in ${cliSrc}.`);

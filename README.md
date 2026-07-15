@@ -2,7 +2,7 @@
 
 Gate and fix AI artifacts — MCP servers, Skills, slash commands, hooks, and
 rules files (`CLAUDE.md`, `.cursorrules`, …) — without leaving your editor. The
-extension is a thin front-end over the `shomra` CLI (`Dragox.Backend/agent`):
+extension is a thin front-end over the `shomra` CLI (`Shomra.Agent/`):
 one engine, two faces.
 
 ## What it does
@@ -40,7 +40,7 @@ and org-policy features light up. To pin a specific build instead, point
 **Settings → `shomra.executable`** at a script:
 
 ```
-node C:/Users/you/…/Dragox/Dragox.Backend/agent/shomra.mjs
+node C:/Users/you/…/Dragox/Shomra.Agent/shomra.mjs
 ```
 
 (A value ending in `.mjs`/`.js` is run with Node automatically.) `Fix This File`
@@ -56,13 +56,13 @@ on the dev machine.
 cd Dragox.Extension
 npm install
 npm run compile
-npx @vscode/vsce package        # → shomra-0.1.0.vsix
+npx @vscode/vsce package        # → shomra-<version>.vsix (version from package.json)
 ```
 
 - **VS Code:** Extensions view → `⋯` → *Install from VSIX…*, or
-  `code --install-extension shomra-0.1.0.vsix`.
+  `code --install-extension shomra-<version>.vsix`.
 - **Cursor:** Extensions view → `⋯` → *Install from VSIX…*, or
-  `cursor --install-extension shomra-0.1.0.vsix`.
+  `cursor --install-extension shomra-<version>.vsix`.
 
 ### Develop it
 
