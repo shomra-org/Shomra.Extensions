@@ -30,9 +30,17 @@ try {
 const pkg = JSON.parse(readFileSync(join(cliSrc, 'package.json'), 'utf8'));
 // Bundle exactly what the package publishes (its `files`) minus docs we don't
 // need at runtime; shomra.mjs + its sibling .mjs modules are what actually run.
+// DERIVED from the installed package's `files` (not a hardcoded list) so a new
+// runtime module — e.g. ai-usage.mjs, imported by discovery.mjs — ships
+// automatically when a newer @shomra/agent is bundled, instead of the bundled
+// CLI failing at import time on a module that was left out.
 // package.json is REQUIRED at runtime, not just metadata: shomra.mjs reads its
 // own version from it, so omitting it makes the bundled CLI report 0.0.0.
-const FILES = ['shomra.mjs', 'discovery.mjs', 'guard-signals.mjs', 'code-sast.mjs', 'model-refs.mjs', 'package.json', 'LICENSE', 'NOTICE'];
+const published = Array.isArray(pkg.files) ? pkg.files : [];
+const FILES = [
+  ...published.filter((f) => f.endsWith('.mjs') || f === 'LICENSE' || f === 'NOTICE'),
+  'package.json',
+];
 
 if (!existsSync(join(cliSrc, 'shomra.mjs'))) {
   console.error(`[bundle-cli] shomra.mjs not found in ${cliSrc}.`);
