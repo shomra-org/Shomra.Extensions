@@ -11,3 +11,4 @@ playground/**
 package-lock.json
 .git/**
 scripts/**
+test/**

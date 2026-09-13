@@ -97,6 +97,7 @@
       "properties": {
         "shomra.executable": {
           "type": "string",
+          "scope": "machine",
           "default": "shomra",
           "markdownDescription": "The `shomra` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/Shomra.Agent/shomra.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
         },

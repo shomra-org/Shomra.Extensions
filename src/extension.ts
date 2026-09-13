@@ -2,14 +2,11 @@ import * as vscode from 'vscode';
 import { execFile } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { resolveOnPath, shadowingCommand } from './cli-path';
 
 const SOURCE = 'Shomra';
 
-/**
- * AI-artifact path patterns the gate understands — a mirror of the CLI's
- * ARTIFACT_MATCHERS. ONLY these files are checked; every other file is ignored,
- * so the extension never gates a random source file.
- */
+
 const ARTIFACT_RES: RegExp[] = [
   /(^|\/)\.?mcp\.json$/i,
   /(^|\/)SKILL\.md$/i,
@@ -31,32 +28,20 @@ function isArtifact(fileName: string): boolean {
   return ARTIFACT_RES.some((re) => re.test(p));
 }
 
-/**
- * Source files that can *load an AI model* — Python, notebooks, and JS/TS.
- * These aren't gated as artifacts; instead `shomra models` scans them for model
- * references (from_pretrained / SentenceTransformer / hf_hub_download / …) and
- * looks each up in the Model Security Index. Narrower than the CLI's full scan
- * set (which also reads yaml/toml/txt) to keep on-save latency low in the editor.
- */
+
 const MODEL_RES = /\.(py|ipynb|[mc]?[jt]sx?)$/i;
 function isModelScannable(fileName: string): boolean {
   return MODEL_RES.test(fileName.replace(/\\/g, '/'));
 }
 
-/** Raised when the `shomra` binary can't be found on PATH / at the configured path. */
 class ShomraNotFound extends Error {}
 
 let diagnostics: vscode.DiagnosticCollection;
-// Model-index findings live in their own collection so they don't clobber (or
-// get clobbered by) the artifact gate — a file is one or the other, never both.
 let modelDiags: vscode.DiagnosticCollection;
 
 type Kwarg = { name: string; value: string; reason: string };
-// Per-file, per-(0-based)line remediation plan from the last `shomra models` run,
-// so the "Harden this model load" quick-fix knows which kwargs to offer.
+
 const modelFixByUri = new Map<string, Map<number, { id: string; kwargs: Kwarg[] }>>();
-// Document version last scanned per file uri, so opening/focusing an already-
-// scanned tab doesn't respawn the CLI. A save always forces a fresh scan.
 const lastScanned = new Map<string, number>();
 let status: vscode.StatusBarItem;
 let output: vscode.OutputChannel;
@@ -85,30 +70,28 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand('shomra.fixFile', (uri?: vscode.Uri) => fixFile(uri)),
     vscode.commands.registerCommand('shomra.explainFile', (uri?: vscode.Uri) => explainFile(uri)),
     vscode.commands.registerCommand('shomra.installHook', () => {
+      const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      const shadow = folder ? shadowingCommand(folder) : null;
+      if (shadow) {
+        vscode.window.showErrorMessage(
+          `Shomra: install-hook was not run - "${path.basename(shadow)}" in this workspace would run instead of the Shomra CLI. Remove it, or run \`shomra install-hook\` from a terminal outside this folder.`,
+        );
+        return;
+      }
       const term = vscode.window.createTerminal('Shomra');
       term.show();
       term.sendText('shomra install-hook');
     }),
   );
 
-  // Ambient checking — save is the primary loop; open catches problems earlier.
-  // Two independent detectors run on the same triggers: the artifact gate
-  // (checkFile) and the model-index lookup (checkModelRefs), each scoped to the
-  // file types it understands.
+
   context.subscriptions.push(
-    // Save is the primary loop — content just changed, so always re-scan.
     vscode.workspace.onDidSaveTextDocument((doc) => ambientCheck(doc, { force: true, gate: 'checkOnSave' })),
-    // Opening a file scans it right away…
     vscode.workspace.onDidOpenTextDocument((doc) => ambientCheck(doc)),
-    // …and so does switching to it. onDidOpen does NOT fire for a tab that's
-    // already open (or restored from a previous session), so without this the
-    // check would appear to run "only on save." Version-guarded, so flipping
-    // between unchanged tabs is a no-op.
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor?.document) ambientCheck(editor.document);
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => {
-      // Keep diagnostics for saved files; only drop untitled scratch buffers.
       if (doc.isUntitled) {
         diagnostics.delete(doc.uri);
         modelDiags.delete(doc.uri);
@@ -117,7 +100,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
-  // One-click fix on any flagged artifact.
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
       { scheme: 'file' },
@@ -126,8 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
-  // Check whatever files are already open (incl. the focused one), plus an
-  // optional full sweep.
+
   for (const doc of vscode.workspace.textDocuments) ambientCheck(doc);
   if (vscode.window.activeTextEditor?.document) ambientCheck(vscode.window.activeTextEditor.document);
   if (cfg<boolean>('checkWorkspaceOnStartup', false)) checkWorkspace();
@@ -144,12 +125,7 @@ function cfg<T>(key: string, def: T): T {
   return vscode.workspace.getConfiguration('shomra').get<T>(key, def);
 }
 
-/**
- * Run the ambient checks (artifact gate + model-index lookup) for a document.
- * Runs at most once per (uri, document version) unless `force`, so opening or
- * focusing an unchanged tab doesn't respawn the CLI. `gate` selects which on/off
- * setting applies — `checkOnOpen` for open/focus, `checkOnSave` for saves.
- */
+
 function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 'checkOnOpen' | 'checkOnSave' } = {}) {
   if (doc.uri.scheme !== 'file') return;
   const key = doc.uri.toString();
@@ -159,13 +135,7 @@ function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 
   if (cfg<boolean>('checkModels', true)) checkModelRefs(doc);
 }
 
-/**
- * Absolute path to the CLI bundled inside the extension (`cli/shomra.mjs`), or
- * null if this build didn't ship it. This is the zero-install fallback: when the
- * user has no global `shomra` on PATH, we run the bundled copy with VS Code's own
- * Node runtime, so the extension works out of the box with nothing to set up.
- * Built at `out/extension.js`, so the CLI sits one level up in `cli/`.
- */
+
 function bundledCli(): string | null {
   const p = path.join(__dirname, '..', 'cli', 'shomra.mjs');
   try {
@@ -175,36 +145,34 @@ function bundledCli(): string | null {
   }
 }
 
-/** Resolve `shomra.executable` into a spawnable command + leading args. */
-function invocation(): { cmd: string; base: string[]; asNode: boolean } {
+/**
+ * Resolve `shomra.executable` into a spawnable command + leading args, or null
+ * when nothing safe to spawn is configured - the bundled CLI runs instead.
+ */
+function invocation(): { cmd: string; base: string[]; asNode: boolean } | null {
   const exe = cfg<string>('executable', 'shomra').trim();
   // A script path (…/shomra.mjs) is run with THIS process's runtime. In the VS
   // Code extension host `process.execPath` is the Electron binary, which only
   // behaves as plain Node when ELECTRON_RUN_AS_NODE=1 (set in runShomra).
-  if (/\.(mjs|js|cjs)$/i.test(exe)) return { cmd: process.execPath, base: [exe], asNode: true };
-  const parts = exe.split(/\s+/);
-  if (parts.length > 1) return { cmd: parts[0], base: parts.slice(1), asNode: false };
-  return { cmd: exe || 'shomra', base: [], asNode: false };
+  // Only an absolute one: a relative script resolves against the workspace.
+  if (/\.(mjs|js|cjs)$/i.test(exe)) return path.isAbsolute(exe) ? { cmd: process.execPath, base: [exe], asNode: true } : null;
+  const [head, ...rest] = exe.split(/\s+/).filter(Boolean);
+  const cmd = resolveOnPath(head ?? 'shomra');
+  return cmd ? { cmd, base: rest, asNode: false } : null;
 }
 
-/**
- * Run the CLI and return its output. A non-zero exit (1 = blocked, 2 = flagged)
- * is NORMAL — we resolve with the code and parse stdout regardless; only a
- * missing binary rejects.
- */
+
 function runShomra(
   args: string[],
   cwd: string,
   viaBundled = false,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
-  // Normal path uses `shomra.executable` (PATH or a user-set script). If that
-  // command isn't found, we retry once against the CLI bundled in the extension
-  // (viaBundled) so a fresh install just works — a global `shomra`, when present,
-  // still wins so enrolled/org features keep working.
   const bundled = bundledCli();
-  const { cmd, base, asNode } = viaBundled
-    ? { cmd: process.execPath, base: [bundled as string], asNode: true }
-    : invocation();
+  const resolved = viaBundled ? { cmd: process.execPath, base: [bundled as string], asNode: true } : invocation();
+  if (!resolved) {
+    return !viaBundled && bundled ? runShomra(args, cwd, true) : Promise.reject(new ShomraNotFound());
+  }
+  const { cmd, base, asNode } = resolved;
   const argv = [...base, ...args];
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1' };
   // Make the Electron host binary run our .mjs as a plain Node script.
@@ -253,9 +221,7 @@ function handleRunError(e: unknown) {
     if (warnedMissing) return;
     warnedMissing = true;
     const exe = cfg<string>('executable', 'shomra');
-    // The extension ships the CLI, so this only fires if the bundle is missing or
-    // a user pointed `shomra.executable` at a bad path. Offer settings, not a
-    // mandatory install — the bundled CLI is meant to make setup unnecessary.
+
     vscode.window
       .showWarningMessage(
         `Shomra couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected — reload the window, or set "shomra.executable" to a shomra.mjs path if you meant to use your own.`,
@@ -297,13 +263,6 @@ async function checkFile(doc: vscode.TextDocument, notifyClean = false) {
 
 // ── model-index lookup ────────────────────────────────────────────
 
-/**
- * Scan a source file for AI-model references (from_pretrained / hf_hub_download /
- * SentenceTransformer / …) and surface any that are known-vulnerable in the
- * Shomra Model Index as diagnostics anchored on the model-load line. The CLI
- * (`shomra models <file> --json`) does the detection and the lookup; this only
- * renders the result. Silent on clean or not-yet-indexed models.
- */
 async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   if (doc.uri.scheme !== 'file' || !isModelScannable(doc.fileName)) {
     modelDiags.delete(doc.uri);
@@ -326,8 +285,7 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   const diags: vscode.Diagnostic[] = [];
   const fixes = new Map<number, { id: string; kwargs: Kwarg[] }>();
   for (const m of result.models ?? []) {
-    // Only known-vulnerable models raise a squiggle. `notIndexed` (not scanned
-    // yet), local runtimes and OK verdicts stay silent — no noise on clean code.
+
     if (!m.found || m.alert === 'OK') continue;
     const sev = m.alert === 'BLOCK' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
     const titles = (m.findings ?? []).slice(0, 3).map((f: any) => f.title).join('; ');
@@ -354,18 +312,12 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   }
 }
 
-/**
- * "Harden this model load" quick-fix. Offers the safe-loading kwargs Shomra
- * recommended for the flagged model in a multi-select picker — the developer
- * CHOOSES which to apply — then rewrites the `from_pretrained(...)` call in place
- * (clean undo). Deterministic; no AI, no network beyond the model lookup.
- */
+
 async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (!target) return;
   const doc = await vscode.workspace.openTextDocument(target);
   const editor = vscode.window.activeTextEditor;
-  // Resolve the line: explicit arg (from the code-action) or the cursor.
   const line0 = typeof line === 'number' ? line : editor?.selection.active.line ?? -1;
   const plan = modelFixByUri.get(target.toString())?.get(line0);
   if (!plan || !plan.kwargs.length) {
@@ -401,12 +353,7 @@ async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   await checkModelRefs(doc);
 }
 
-/**
- * Insert `name=value` kwargs into the model-loading call on a single line,
- * balance-matching the loader's parentheses (so trailing `.to(device)` etc.
- * doesn't confuse it). Skips any kwarg already present. Returns null if the call
- * spans multiple lines (we don't rewrite those) or no loader call is found.
- */
+
 function injectKwargs(line: string, kwargs: Kwarg[]): string | null {
   const m = line.match(/\.?(from_pretrained|hf_hub_download|snapshot_download|SentenceTransformer|CrossEncoder|InferenceClient|pipeline)\s*\(/);
   if (!m || m.index === undefined) return null;
@@ -423,10 +370,8 @@ function injectKwargs(line: string, kwargs: Kwarg[]): string | null {
       }
     }
   }
-  if (close < 0) return null; // unbalanced on this line → multi-line call
+  if (close < 0) return null; 
   const inner = line.slice(open + 1, close);
-  // Skip any kwarg already passed (a repeated keyword arg is a Python SyntaxError).
-  // The kwarg names are distinctive, so no word-boundary anchor is needed.
   const toAdd = kwargs.filter((k) => !new RegExp(`${k.name}\\s*=`).test(inner));
   if (!toAdd.length) return line;
   const args = toAdd.map((k) => `${k.name}=${k.value}`).join(', ');
@@ -507,7 +452,6 @@ async function fixFile(uri?: vscode.Uri) {
       }
       const res = parse(out.stdout);
       if (!res) {
-        // No JSON usually means a hard stop (e.g. not enrolled) — surface the reason.
         const reason = (out.stderr.trim().split('\n').find((l) => l.trim()) ?? 'fix failed').replace(/\[[0-9;]*m/g, '');
         vscode.window.showErrorMessage(`Shomra: ${reason}`);
         output.appendLine(out.stderr || out.stdout);
@@ -519,8 +463,6 @@ async function fixFile(uri?: vscode.Uri) {
         else vscode.window.showInformationMessage(msg);
         return;
       }
-      // Apply the returned fixed bytes through a full-document edit, so the
-      // change joins VS Code's undo stack and the open editor updates in place.
       const edit = new vscode.WorkspaceEdit();
       const fullRange = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
       edit.replace(target, fullRange, String(res.fixedContent ?? ''));
@@ -613,11 +555,7 @@ function buildDiagnostics(text: string, findings: any[]): vscode.Diagnostic[] {
   });
 }
 
-/**
- * The gate now resolves a 1-based `line` for most findings (analyzer
- * `evidence.line`), so anchor the squiggle on exactly that line. Fall back to
- * the snippet heuristic only when no line came through.
- */
+
 function rangeFor(text: string, finding: any): vscode.Range {
   const lines = text.split(/\r?\n/);
   if (typeof finding.line === 'number' && finding.line >= 1 && finding.line <= lines.length) {
@@ -630,13 +568,7 @@ function rangeFor(text: string, finding: any): vscode.Range {
   return locate(text, finding);
 }
 
-/**
- * Best-effort line resolution: the gate findings don't carry line numbers, so
- * we look for a representative snippet — a quoted phrase in the finding text,
- * or a class-typical token (an injection phrase, a secret prefix, a shell
- * installer) — and anchor the squiggle there. Falls back to the first
- * non-empty line so a finding is never lost, just less precisely placed.
- */
+
 function locate(text: string, finding: any): vscode.Range {
   const candidates: string[] = [];
   for (const s of [finding.title, finding.detail, finding.remediationText]) {
@@ -703,7 +635,6 @@ class ShomraFixProvider implements vscode.CodeActionProvider {
     const mine = context.diagnostics.filter((d) => d.source === SOURCE);
     if (!mine.length) return;
 
-    // Artifact gate → AI Fix / Explain.
     if (isArtifact(document.fileName)) {
       const fix = new vscode.CodeAction('Shomra: Fix this file (AI)', vscode.CodeActionKind.QuickFix);
       fix.command = { command: 'shomra.fixFile', title: 'Shomra: Fix this file', arguments: [document.uri] };
@@ -715,13 +646,11 @@ class ShomraFixProvider implements vscode.CodeActionProvider {
       return [fix, explain];
     }
 
-    // Model-index findings → harden the load, open the model's page, re-check.
     if (isModelScannable(document.fileName)) {
       const actions: vscode.CodeAction[] = [];
       const fixes = modelFixByUri.get(document.uri.toString());
       for (const d of mine) {
         const line0 = d.range.start.line;
-        // Primary, preferred action: apply the safe-loading kwargs (user chooses which).
         if (fixes?.get(line0)?.kwargs.length) {
           const harden = new vscode.CodeAction('Shomra: Harden this model load…', vscode.CodeActionKind.QuickFix);
           harden.command = { command: 'shomra.hardenModelLoad', title: 'Harden model load', arguments: [document.uri, line0] };
