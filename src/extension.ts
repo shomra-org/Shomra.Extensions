@@ -6,7 +6,6 @@ import { resolveOnPath, shadowingCommand } from './cli-path';
 
 const SOURCE = 'Shomra';
 
-
 const ARTIFACT_RES: RegExp[] = [
   /(^|\/)\.?mcp\.json$/i,
   /(^|\/)SKILL\.md$/i,
@@ -28,7 +27,6 @@ function isArtifact(fileName: string): boolean {
   return ARTIFACT_RES.some((re) => re.test(p));
 }
 
-
 const MODEL_RES = /\.(py|ipynb|[mc]?[jt]sx?)$/i;
 function isModelScannable(fileName: string): boolean {
   return MODEL_RES.test(fileName.replace(/\\/g, '/'));
@@ -40,7 +38,6 @@ let diagnostics: vscode.DiagnosticCollection;
 let modelDiags: vscode.DiagnosticCollection;
 
 type Kwarg = { name: string; value: string; reason: string };
-
 const modelFixByUri = new Map<string, Map<number, { id: string; kwargs: Kwarg[] }>>();
 const lastScanned = new Map<string, number>();
 let status: vscode.StatusBarItem;
@@ -108,7 +105,6 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
-
   for (const doc of vscode.workspace.textDocuments) ambientCheck(doc);
   if (vscode.window.activeTextEditor?.document) ambientCheck(vscode.window.activeTextEditor.document);
   if (cfg<boolean>('checkWorkspaceOnStartup', false)) checkWorkspace();
@@ -119,12 +115,9 @@ export function deactivate() {
   modelDiags?.clear();
 }
 
-// ── config + process ──────────────────────────────────────────────
-
 function cfg<T>(key: string, def: T): T {
   return vscode.workspace.getConfiguration('shomra').get<T>(key, def);
 }
-
 
 function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 'checkOnOpen' | 'checkOnSave' } = {}) {
   if (doc.uri.scheme !== 'file') return;
@@ -145,16 +138,9 @@ function bundledCli(): string | null {
   }
 }
 
-/**
- * Resolve `shomra.executable` into a spawnable command + leading args, or null
- * when nothing safe to spawn is configured - the bundled CLI runs instead.
- */
+
 function invocation(): { cmd: string; base: string[]; asNode: boolean } | null {
   const exe = cfg<string>('executable', 'shomra').trim();
-  // A script path (…/shomra.mjs) is run with THIS process's runtime. In the VS
-  // Code extension host `process.execPath` is the Electron binary, which only
-  // behaves as plain Node when ELECTRON_RUN_AS_NODE=1 (set in runShomra).
-  // Only an absolute one: a relative script resolves against the workspace.
   if (/\.(mjs|js|cjs)$/i.test(exe)) return path.isAbsolute(exe) ? { cmd: process.execPath, base: [exe], asNode: true } : null;
   const [head, ...rest] = exe.split(/\s+/).filter(Boolean);
   const cmd = resolveOnPath(head ?? 'shomra');
@@ -175,7 +161,6 @@ function runShomra(
   const { cmd, base, asNode } = resolved;
   const argv = [...base, ...args];
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1' };
-  // Make the Electron host binary run our .mjs as a plain Node script.
   if (asNode) env.ELECTRON_RUN_AS_NODE = '1';
   output.appendLine(
     `$ ${asNode ? '[node] ' : cmd + ' '}${argv.join(' ')}   (cwd: ${cwd}${viaBundled ? ', bundled' : ''})`,
@@ -187,7 +172,6 @@ function runShomra(
       { cwd, maxBuffer: 16 * 1024 * 1024, windowsHide: true, env },
       (err: any, stdout, stderr) => {
         if (err && (err.code === 'ENOENT' || err.errno === -4058 || err.errno === 'ENOENT')) {
-          // Configured command missing → fall back to the bundled CLI once.
           if (!viaBundled && bundled) {
             runShomra(args, cwd, true).then(resolve, reject);
             return;
@@ -221,10 +205,9 @@ function handleRunError(e: unknown) {
     if (warnedMissing) return;
     warnedMissing = true;
     const exe = cfg<string>('executable', 'shomra');
-
     vscode.window
       .showWarningMessage(
-        `Shomra couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected — reload the window, or set "shomra.executable" to a shomra.mjs path if you meant to use your own.`,
+        `Shomra couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected - reload the window, or set "shomra.executable" to a shomra.mjs path if you meant to use your own.`,
         'Open Settings',
       )
       .then((pick) => {
@@ -234,8 +217,6 @@ function handleRunError(e: unknown) {
   }
   output.appendLine(`error: ${(e as Error)?.message ?? e}`);
 }
-
-// ── checking ──────────────────────────────────────────────────────
 
 async function checkFile(doc: vscode.TextDocument, notifyClean = false) {
   if (doc.uri.scheme !== 'file' || !isArtifact(doc.fileName)) {
@@ -251,7 +232,7 @@ async function checkFile(doc: vscode.TextDocument, notifyClean = false) {
   }
   const result = parse(out.stdout);
   if (!result) {
-    output.appendLine(`checkFile: no JSON for ${doc.fileName} — ${out.stderr.trim() || '(no stderr)'}`);
+    output.appendLine(`checkFile: no JSON for ${doc.fileName} - ${out.stderr.trim() || '(no stderr)'}`);
     return;
   }
   const diags = buildDiagnostics(doc.getText(), result.findings ?? []);
@@ -285,12 +266,11 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   const diags: vscode.Diagnostic[] = [];
   const fixes = new Map<number, { id: string; kwargs: Kwarg[] }>();
   for (const m of result.models ?? []) {
-
     if (!m.found || m.alert === 'OK') continue;
     const sev = m.alert === 'BLOCK' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
     const titles = (m.findings ?? []).slice(0, 3).map((f: any) => f.title).join('; ');
     const more = (m.findingCount ?? 0) > 3 ? ` (+${m.findingCount - 3} more)` : '';
-    const message = `Known-vulnerable AI model: ${m.id} — ${m.verdict} (risk ${m.riskScore}). ${m.findingCount} finding(s): ${titles}${more}. Source: Shomra Model Index.`;
+    const message = `Known-vulnerable AI model: ${m.id} - ${m.verdict} (risk ${m.riskScore}). ${m.findingCount} finding(s): ${titles}${more}. Source: Shomra Model Index.`;
     const slug = String(m.id).replace(/\//g, '__');
     const kwargs: Kwarg[] = Array.isArray(m.fix?.kwargs) ? m.fix.kwargs : [];
     for (const loc of m.locations ?? []) {
@@ -307,11 +287,10 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   if (notifyClean && diags.length === 0) {
     const n = result.detected ?? 0;
     vscode.window.showInformationMessage(
-      n ? `Shomra: ${n} model reference(s) — no known vulnerabilities.` : `Shomra: no AI model references in ${path.basename(doc.fileName)}.`,
+      n ? `Shomra: ${n} model reference(s) - no known vulnerabilities.` : `Shomra: no AI model references in ${path.basename(doc.fileName)}.`,
     );
   }
 }
-
 
 async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -353,11 +332,10 @@ async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   await checkModelRefs(doc);
 }
 
-
 function injectKwargs(line: string, kwargs: Kwarg[]): string | null {
   const m = line.match(/\.?(from_pretrained|hf_hub_download|snapshot_download|SentenceTransformer|CrossEncoder|InferenceClient|pipeline)\s*\(/);
   if (!m || m.index === undefined) return null;
-  const open = m.index + m[0].length - 1; // index of the '('
+  const open = m.index + m[0].length - 1;
   let depth = 0;
   let close = -1;
   for (let i = open; i < line.length; i++) {
@@ -401,7 +379,7 @@ async function checkWorkspace() {
     }
     const data = parse(out.stdout);
     if (!data) {
-      output.appendLine(`checkWorkspace: no JSON for ${folder.uri.fsPath} — ${out.stderr.trim() || '(no stderr)'}`);
+      output.appendLine(`checkWorkspace: no JSON for ${folder.uri.fsPath} - ${out.stderr.trim() || '(no stderr)'}`);
       continue;
     }
     blocked += data.blocked ?? 0;
@@ -421,11 +399,9 @@ async function checkWorkspace() {
   }
   setStatus(blocked, flagged, total);
   vscode.window.showInformationMessage(
-    total ? `Shomra: ${total} artifact(s) — ${blocked} blocked, ${flagged} flagged.` : 'Shomra: no AI artifacts found.',
+    total ? `Shomra: ${total} artifact(s) - ${blocked} blocked, ${flagged} flagged.` : 'Shomra: no AI artifacts found.',
   );
 }
-
-// ── fixing ────────────────────────────────────────────────────────
 
 async function fixFile(uri?: vscode.Uri) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -469,13 +445,11 @@ async function fixFile(uri?: vscode.Uri) {
       await vscode.workspace.applyEdit(edit);
       await doc.save();
       const n = res.findingCount ?? (res.findings?.length ?? 0);
-      vscode.window.showInformationMessage(`Shomra: applied fix — ${res.explanation || `${n} finding(s) addressed`}`);
+      vscode.window.showInformationMessage(`Shomra: applied fix - ${res.explanation || `${n} finding(s) addressed`}`);
       await checkFile(doc);
     },
   );
 }
-
-// ── explaining ────────────────────────────────────────────────────
 
 async function explainFile(uri?: vscode.Uri) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
@@ -507,15 +481,15 @@ async function explainFile(uri?: vscode.Uri) {
         return;
       }
       if (!res.findings.length) {
-        vscode.window.showInformationMessage(`Shomra: ${path.basename(doc.fileName)} is clean — nothing to explain.`);
+        vscode.window.showInformationMessage(`Shomra: ${path.basename(doc.fileName)} is clean - nothing to explain.`);
         return;
       }
       output.clear();
-      output.appendLine(`Shomra — why  ${doc.fileName}`);
+      output.appendLine(`Shomra - why  ${doc.fileName}`);
       if (res.summary) output.appendLine(`\n${res.summary}`);
       for (const f of res.findings) {
         const at = f.line ? ` (line ${f.line})` : '';
-        const fp = f.likelyFalsePositive ? '  — likely false positive' : '';
+        const fp = f.likelyFalsePositive ? '  - likely false positive' : '';
         output.appendLine(`\n● [${f.severity}] ${f.title}${at}${fp}`);
         if (f.why) output.appendLine(`  why: ${f.why}`);
         if (f.exploit) output.appendLine(`  exploit: ${f.exploit}`);
@@ -523,12 +497,10 @@ async function explainFile(uri?: vscode.Uri) {
         if (f.remediationText) output.appendLine(`  fix: ${f.remediationText}`);
       }
       output.show(true);
-      vscode.window.showInformationMessage(`Shomra: ${res.summary || `${res.findings.length} finding(s) explained`} — see Output → Shomra.`);
+      vscode.window.showInformationMessage(`Shomra: ${res.summary || `${res.findings.length} finding(s) explained`} - see Output → Shomra.`);
     },
   );
 }
-
-// ── diagnostics ───────────────────────────────────────────────────
 
 function severityOf(sev: string): vscode.DiagnosticSeverity {
   switch (String(sev).toUpperCase()) {
@@ -546,7 +518,7 @@ function buildDiagnostics(text: string, findings: any[]): vscode.Diagnostic[] {
   return (findings ?? []).map((f) => {
     const d = new vscode.Diagnostic(
       rangeFor(text, f),
-      f.remediationText ? `${f.title} — ${f.remediationText}` : String(f.title ?? 'Finding'),
+      f.remediationText ? `${f.title} - ${f.remediationText}` : String(f.title ?? 'Finding'),
       severityOf(f.severity),
     );
     d.source = SOURCE;
@@ -554,7 +526,6 @@ function buildDiagnostics(text: string, findings: any[]): vscode.Diagnostic[] {
     return d;
   });
 }
-
 
 function rangeFor(text: string, finding: any): vscode.Range {
   const lines = text.split(/\r?\n/);
@@ -567,7 +538,6 @@ function rangeFor(text: string, finding: any): vscode.Range {
   }
   return locate(text, finding);
 }
-
 
 function locate(text: string, finding: any): vscode.Range {
   const candidates: string[] = [];
@@ -607,20 +577,18 @@ function offsetToPos(text: string, offset: number): { line: number; character: n
   return { line, character: offset - lineStart };
 }
 
-// ── UI bits ───────────────────────────────────────────────────────
-
 function setStatus(blocked: number, flagged: number, total: number) {
   if (blocked) {
     status.text = `$(error) Shomra: ${blocked}`;
-    status.tooltip = `${blocked} blocked · ${flagged} flagged of ${total} — click to re-check`;
+    status.tooltip = `${blocked} blocked · ${flagged} flagged of ${total} - click to re-check`;
     status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
   } else if (flagged) {
     status.text = `$(warning) Shomra: ${flagged}`;
-    status.tooltip = `${flagged} flagged of ${total} — click to re-check`;
+    status.tooltip = `${flagged} flagged of ${total} - click to re-check`;
     status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
   } else {
     status.text = '$(shield) Shomra';
-    status.tooltip = total ? `${total} artifact(s) clean — click to re-check` : 'AI-security gate — click to check the workspace';
+    status.tooltip = total ? `${total} artifact(s) clean - click to re-check` : 'AI-security gate - click to check the workspace';
     status.backgroundColor = undefined;
   }
   status.show();
