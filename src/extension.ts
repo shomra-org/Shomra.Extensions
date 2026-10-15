@@ -4,7 +4,8 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { resolveOnPath, shadowingCommand } from './cli-path';
 
-const SOURCE = 'Shomra';
+const SOURCE = 'NoFly';
+const LEGACY = 'shomra';
 
 const ARTIFACT_RES: RegExp[] = [
   /(^|\/)\.?mcp\.json$/i,
@@ -32,7 +33,7 @@ function isModelScannable(fileName: string): boolean {
   return MODEL_RES.test(fileName.replace(/\\/g, '/'));
 }
 
-class ShomraNotFound extends Error {}
+class NoFlyNotFound extends Error {}
 
 let diagnostics: vscode.DiagnosticCollection;
 let modelDiags: vscode.DiagnosticCollection;
@@ -45,41 +46,48 @@ let output: vscode.OutputChannel;
 let warnedMissing = false;
 
 export function activate(context: vscode.ExtensionContext) {
-  diagnostics = vscode.languages.createDiagnosticCollection('shomra');
-  modelDiags = vscode.languages.createDiagnosticCollection('shomra-models');
-  output = vscode.window.createOutputChannel('Shomra');
+  diagnostics = vscode.languages.createDiagnosticCollection('nofly');
+  modelDiags = vscode.languages.createDiagnosticCollection('nofly-models');
+  output = vscode.window.createOutputChannel('NoFly');
   status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  status.command = 'shomra.checkWorkspace';
+  status.command = 'nofly.checkWorkspace';
   setStatus(0, 0, 0);
   context.subscriptions.push(diagnostics, modelDiags, output, status);
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand('shomra.checkWorkspace', () => checkWorkspace()),
-    vscode.commands.registerCommand('shomra.checkFile', () => {
+  const commands: Record<string, (...args: any[]) => unknown> = {
+    checkWorkspace: () => checkWorkspace(),
+    checkFile: () => {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) checkFile(doc, true);
-    }),
-    vscode.commands.registerCommand('shomra.checkModelsFile', () => {
+    },
+    checkModelsFile: () => {
       const doc = vscode.window.activeTextEditor?.document;
       if (doc) checkModelRefs(doc, true);
-    }),
-    vscode.commands.registerCommand('shomra.hardenModelLoad', (uri?: vscode.Uri, line?: number) => hardenModelLoad(uri, line)),
-    vscode.commands.registerCommand('shomra.fixFile', (uri?: vscode.Uri) => fixFile(uri)),
-    vscode.commands.registerCommand('shomra.explainFile', (uri?: vscode.Uri) => explainFile(uri)),
-    vscode.commands.registerCommand('shomra.installHook', () => {
+    },
+    hardenModelLoad: (uri?: vscode.Uri, line?: number) => hardenModelLoad(uri, line),
+    fixFile: (uri?: vscode.Uri) => fixFile(uri),
+    explainFile: (uri?: vscode.Uri) => explainFile(uri),
+    installHook: () => {
+      const cli = resolveOnPath('nofly') || !resolveOnPath(LEGACY) ? 'nofly' : LEGACY;
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const shadow = folder ? shadowingCommand(folder) : null;
+      const shadow = folder ? shadowingCommand(folder, process.env, process.platform, cli) : null;
       if (shadow) {
         vscode.window.showErrorMessage(
-          `Shomra: install-hook was not run - "${path.basename(shadow)}" in this workspace would run instead of the Shomra CLI. Remove it, or run \`shomra install-hook\` from a terminal outside this folder.`,
+          `NoFly: install-hook was not run - "${path.basename(shadow)}" in this workspace would run instead of the NoFly CLI. Remove it, or run \`${cli} install-hook\` from a terminal outside this folder.`,
         );
         return;
       }
-      const term = vscode.window.createTerminal('Shomra');
+      const term = vscode.window.createTerminal('NoFly');
       term.show();
-      term.sendText('shomra install-hook');
-    }),
-  );
+      term.sendText(`${cli} install-hook`);
+    },
+  };
+  for (const [name, run] of Object.entries(commands)) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(`nofly.${name}`, run),
+      vscode.commands.registerCommand(`${LEGACY}.${name}`, run),
+    );
+  }
 
 
   context.subscriptions.push(
@@ -100,7 +108,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
       { scheme: 'file' },
-      new ShomraFixProvider(),
+      new NoFlyFixProvider(),
       { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] },
     ),
   );
@@ -116,7 +124,12 @@ export function deactivate() {
 }
 
 function cfg<T>(key: string, def: T): T {
-  return vscode.workspace.getConfiguration('shomra').get<T>(key, def);
+  const own = vscode.workspace.getConfiguration('nofly');
+  const set = own.inspect<T>(key);
+  if ([set?.globalValue, set?.workspaceValue, set?.workspaceFolderValue].some((v) => v !== undefined)) return own.get<T>(key, def);
+  const legacy = vscode.workspace.getConfiguration(LEGACY).inspect<T>(key);
+  const old = key === 'executable' ? legacy?.globalValue : legacy?.workspaceFolderValue ?? legacy?.workspaceValue ?? legacy?.globalValue;
+  return old !== undefined ? old : own.get<T>(key, def);
 }
 
 function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 'checkOnOpen' | 'checkOnSave' } = {}) {
@@ -130,25 +143,27 @@ function ambientCheck(doc: vscode.TextDocument, opts: { force?: boolean; gate?: 
 
 
 function bundledCli(): string | null {
-  const p = path.join(__dirname, '..', 'cli', 'shomra.mjs');
-  try {
-    return fs.existsSync(p) ? p : null;
-  } catch {
-    return null;
+  for (const entry of ['nofly.mjs', `${LEGACY}.mjs`]) {
+    const p = path.join(__dirname, '..', 'cli', entry);
+    try {
+      if (fs.existsSync(p)) return p;
+    } catch {
+    }
   }
+  return null;
 }
 
 
 function invocation(): { cmd: string; base: string[]; asNode: boolean } | null {
-  const exe = cfg<string>('executable', 'shomra').trim();
+  const exe = cfg<string>('executable', 'nofly').trim();
   if (/\.(mjs|js|cjs)$/i.test(exe)) return path.isAbsolute(exe) ? { cmd: process.execPath, base: [exe], asNode: true } : null;
   const [head, ...rest] = exe.split(/\s+/).filter(Boolean);
-  const cmd = resolveOnPath(head ?? 'shomra');
+  const cmd = resolveOnPath(head ?? 'nofly') ?? (head === 'nofly' ? resolveOnPath(LEGACY) : null);
   return cmd ? { cmd, base: rest, asNode: false } : null;
 }
 
 
-function runShomra(
+function runNoFly(
   args: string[],
   cwd: string,
   viaBundled = false,
@@ -156,7 +171,7 @@ function runShomra(
   const bundled = bundledCli();
   const resolved = viaBundled ? { cmd: process.execPath, base: [bundled as string], asNode: true } : invocation();
   if (!resolved) {
-    return !viaBundled && bundled ? runShomra(args, cwd, true) : Promise.reject(new ShomraNotFound());
+    return !viaBundled && bundled ? runNoFly(args, cwd, true) : Promise.reject(new NoFlyNotFound());
   }
   const { cmd, base, asNode } = resolved;
   const argv = [...base, ...args];
@@ -173,10 +188,10 @@ function runShomra(
       (err: any, stdout, stderr) => {
         if (err && (err.code === 'ENOENT' || err.errno === -4058 || err.errno === 'ENOENT')) {
           if (!viaBundled && bundled) {
-            runShomra(args, cwd, true).then(resolve, reject);
+            runNoFly(args, cwd, true).then(resolve, reject);
             return;
           }
-          reject(new ShomraNotFound());
+          reject(new NoFlyNotFound());
           return;
         }
         const code = typeof err?.code === 'number' ? err.code : 0;
@@ -201,17 +216,17 @@ function folderFor(uri: vscode.Uri): string {
 }
 
 function handleRunError(e: unknown) {
-  if (e instanceof ShomraNotFound) {
+  if (e instanceof NoFlyNotFound) {
     if (warnedMissing) return;
     warnedMissing = true;
-    const exe = cfg<string>('executable', 'shomra');
+    const exe = cfg<string>('executable', 'nofly');
     vscode.window
       .showWarningMessage(
-        `Shomra couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected - reload the window, or set "shomra.executable" to a shomra.mjs path if you meant to use your own.`,
+        `NoFly couldn't run its CLI (tried "${exe}"). The extension bundles it, so this is unexpected - reload the window, or set "nofly.executable" to a nofly.mjs path if you meant to use your own.`,
         'Open Settings',
       )
       .then((pick) => {
-        if (pick === 'Open Settings') vscode.commands.executeCommand('workbench.action.openSettings', 'shomra.executable');
+        if (pick === 'Open Settings') vscode.commands.executeCommand('workbench.action.openSettings', 'nofly.executable');
       });
     return;
   }
@@ -225,7 +240,7 @@ async function checkFile(doc: vscode.TextDocument, notifyClean = false) {
   }
   let out;
   try {
-    out = await runShomra(['gate', doc.fileName, '--json'], folderFor(doc.uri));
+    out = await runNoFly(['gate', doc.fileName, '--json'], folderFor(doc.uri));
   } catch (e) {
     handleRunError(e);
     return;
@@ -238,7 +253,7 @@ async function checkFile(doc: vscode.TextDocument, notifyClean = false) {
   const diags = buildDiagnostics(doc.getText(), result.findings ?? []);
   diagnostics.set(doc.uri, diags);
   if (notifyClean && diags.length === 0) {
-    vscode.window.showInformationMessage(`Shomra: ${path.basename(doc.fileName)} is clean.`);
+    vscode.window.showInformationMessage(`NoFly: ${path.basename(doc.fileName)} is clean.`);
   }
 }
 
@@ -251,7 +266,7 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   }
   let out;
   try {
-    out = await runShomra(['models', doc.fileName, '--json'], folderFor(doc.uri));
+    out = await runNoFly(['models', doc.fileName, '--json'], folderFor(doc.uri));
   } catch (e) {
     handleRunError(e);
     return;
@@ -270,7 +285,7 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
     const sev = m.alert === 'BLOCK' ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning;
     const titles = (m.findings ?? []).slice(0, 3).map((f: any) => f.title).join('; ');
     const more = (m.findingCount ?? 0) > 3 ? ` (+${m.findingCount - 3} more)` : '';
-    const message = `Known-vulnerable AI model: ${m.id} - ${m.verdict} (risk ${m.riskScore}). ${m.findingCount} finding(s): ${titles}${more}. Source: Shomra Model Index.`;
+    const message = `Known-vulnerable AI model: ${m.id} - ${m.verdict} (risk ${m.riskScore}). ${m.findingCount} finding(s): ${titles}${more}. Source: NoFly Model Index.`;
     const slug = String(m.id).replace(/\//g, '__');
     const kwargs: Kwarg[] = Array.isArray(m.fix?.kwargs) ? m.fix.kwargs : [];
     for (const loc of m.locations ?? []) {
@@ -287,7 +302,7 @@ async function checkModelRefs(doc: vscode.TextDocument, notifyClean = false) {
   if (notifyClean && diags.length === 0) {
     const n = result.detected ?? 0;
     vscode.window.showInformationMessage(
-      n ? `Shomra: ${n} model reference(s) - no known vulnerabilities.` : `Shomra: no AI model references in ${path.basename(doc.fileName)}.`,
+      n ? `NoFly: ${n} model reference(s) - no known vulnerabilities.` : `NoFly: no AI model references in ${path.basename(doc.fileName)}.`,
     );
   }
 }
@@ -300,7 +315,7 @@ async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   const line0 = typeof line === 'number' ? line : editor?.selection.active.line ?? -1;
   const plan = modelFixByUri.get(target.toString())?.get(line0);
   if (!plan || !plan.kwargs.length) {
-    vscode.window.showInformationMessage('Shomra: no model-hardening suggestions for this line. Save the file to re-scan.');
+    vscode.window.showInformationMessage('NoFly: no model-hardening suggestions for this line. Save the file to re-scan.');
     return;
   }
 
@@ -317,18 +332,18 @@ async function hardenModelLoad(uri?: vscode.Uri, line?: number) {
   const lineText = doc.lineAt(line0).text;
   const newLine = injectKwargs(lineText, picks.map((p) => p.kwarg));
   if (newLine === null) {
-    vscode.window.showWarningMessage("Shomra: couldn't rewrite this call automatically (it may span multiple lines). Add the kwargs by hand.");
+    vscode.window.showWarningMessage("NoFly: couldn't rewrite this call automatically (it may span multiple lines). Add the kwargs by hand.");
     return;
   }
   if (newLine === lineText) {
-    vscode.window.showInformationMessage('Shomra: those arguments are already present.');
+    vscode.window.showInformationMessage('NoFly: those arguments are already present.');
     return;
   }
   const edit = new vscode.WorkspaceEdit();
   edit.replace(target, doc.lineAt(line0).range, newLine);
   await vscode.workspace.applyEdit(edit);
   await doc.save();
-  vscode.window.showInformationMessage(`Shomra: hardened the load of ${plan.id} (${picks.length} argument${picks.length === 1 ? '' : 's'}).`);
+  vscode.window.showInformationMessage(`NoFly: hardened the load of ${plan.id} (${picks.length} argument${picks.length === 1 ? '' : 's'}).`);
   await checkModelRefs(doc);
 }
 
@@ -360,10 +375,10 @@ function injectKwargs(line: string, kwargs: Kwarg[]): string | null {
 async function checkWorkspace() {
   const folders = vscode.workspace.workspaceFolders;
   if (!folders?.length) {
-    vscode.window.showInformationMessage('Shomra: open a folder to check.');
+    vscode.window.showInformationMessage('NoFly: open a folder to check.');
     return;
   }
-  status.text = '$(loading~spin) Shomra';
+  status.text = '$(loading~spin) NoFly';
   diagnostics.clear();
   let blocked = 0;
   let flagged = 0;
@@ -371,7 +386,7 @@ async function checkWorkspace() {
   for (const folder of folders) {
     let out;
     try {
-      out = await runShomra(['check', folder.uri.fsPath, '--json'], folder.uri.fsPath);
+      out = await runNoFly(['check', folder.uri.fsPath, '--json'], folder.uri.fsPath);
     } catch (e) {
       handleRunError(e);
       setStatus(blocked, flagged, total);
@@ -399,29 +414,29 @@ async function checkWorkspace() {
   }
   setStatus(blocked, flagged, total);
   vscode.window.showInformationMessage(
-    total ? `Shomra: ${total} artifact(s) - ${blocked} blocked, ${flagged} flagged.` : 'Shomra: no AI artifacts found.',
+    total ? `NoFly: ${total} artifact(s) - ${blocked} blocked, ${flagged} flagged.` : 'NoFly: no AI artifacts found.',
   );
 }
 
 async function fixFile(uri?: vscode.Uri) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (!target || target.scheme !== 'file') {
-    vscode.window.showWarningMessage('Shomra: open an AI-artifact file to fix.');
+    vscode.window.showWarningMessage('NoFly: open an AI-artifact file to fix.');
     return;
   }
   const doc = await vscode.workspace.openTextDocument(target);
   if (!isArtifact(doc.fileName)) {
-    vscode.window.showWarningMessage('Shomra: this is not an AI artifact the gate understands.');
+    vscode.window.showWarningMessage('NoFly: this is not an AI artifact the gate understands.');
     return;
   }
   if (doc.isDirty) await doc.save();
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Shomra: generating fix for ${path.basename(doc.fileName)}…` },
+    { location: vscode.ProgressLocation.Notification, title: `NoFly: generating fix for ${path.basename(doc.fileName)}…` },
     async () => {
       let out;
       try {
-        out = await runShomra(['fix', doc.fileName, '--json'], folderFor(target));
+        out = await runNoFly(['fix', doc.fileName, '--json'], folderFor(target));
       } catch (e) {
         handleRunError(e);
         return;
@@ -429,12 +444,12 @@ async function fixFile(uri?: vscode.Uri) {
       const res = parse(out.stdout);
       if (!res) {
         const reason = (out.stderr.trim().split('\n').find((l) => l.trim()) ?? 'fix failed').replace(/\[[0-9;]*m/g, '');
-        vscode.window.showErrorMessage(`Shomra: ${reason}`);
+        vscode.window.showErrorMessage(`NoFly: ${reason}`);
         output.appendLine(out.stderr || out.stdout);
         return;
       }
       if (!res.canFix) {
-        const msg = `Shomra: ${res.message ?? 'no fix available.'}`;
+        const msg = `NoFly: ${res.message ?? 'no fix available.'}`;
         if (res.reason === 'ai-disabled' || res.reason === 'ai-error') vscode.window.showWarningMessage(msg);
         else vscode.window.showInformationMessage(msg);
         return;
@@ -445,7 +460,7 @@ async function fixFile(uri?: vscode.Uri) {
       await vscode.workspace.applyEdit(edit);
       await doc.save();
       const n = res.findingCount ?? (res.findings?.length ?? 0);
-      vscode.window.showInformationMessage(`Shomra: applied fix - ${res.explanation || `${n} finding(s) addressed`}`);
+      vscode.window.showInformationMessage(`NoFly: applied fix - ${res.explanation || `${n} finding(s) addressed`}`);
       await checkFile(doc);
     },
   );
@@ -454,22 +469,22 @@ async function fixFile(uri?: vscode.Uri) {
 async function explainFile(uri?: vscode.Uri) {
   const target = uri ?? vscode.window.activeTextEditor?.document.uri;
   if (!target || target.scheme !== 'file') {
-    vscode.window.showWarningMessage('Shomra: open an AI-artifact file to explain.');
+    vscode.window.showWarningMessage('NoFly: open an AI-artifact file to explain.');
     return;
   }
   const doc = await vscode.workspace.openTextDocument(target);
   if (!isArtifact(doc.fileName)) {
-    vscode.window.showWarningMessage('Shomra: this is not an AI artifact the gate understands.');
+    vscode.window.showWarningMessage('NoFly: this is not an AI artifact the gate understands.');
     return;
   }
   if (doc.isDirty) await doc.save();
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Shomra: explaining ${path.basename(doc.fileName)}…` },
+    { location: vscode.ProgressLocation.Notification, title: `NoFly: explaining ${path.basename(doc.fileName)}…` },
     async () => {
       let out;
       try {
-        out = await runShomra(['why', doc.fileName, '--json'], folderFor(target));
+        out = await runNoFly(['why', doc.fileName, '--json'], folderFor(target));
       } catch (e) {
         handleRunError(e);
         return;
@@ -477,15 +492,15 @@ async function explainFile(uri?: vscode.Uri) {
       const res = parse(out.stdout);
       if (!res || !Array.isArray(res.findings)) {
         const reason = (out.stderr.trim().split('\n').find((l) => l.trim()) ?? 'explain failed').replace(/\[[0-9;]*m/g, '');
-        vscode.window.showErrorMessage(`Shomra: ${reason}`);
+        vscode.window.showErrorMessage(`NoFly: ${reason}`);
         return;
       }
       if (!res.findings.length) {
-        vscode.window.showInformationMessage(`Shomra: ${path.basename(doc.fileName)} is clean - nothing to explain.`);
+        vscode.window.showInformationMessage(`NoFly: ${path.basename(doc.fileName)} is clean - nothing to explain.`);
         return;
       }
       output.clear();
-      output.appendLine(`Shomra - why  ${doc.fileName}`);
+      output.appendLine(`NoFly - why  ${doc.fileName}`);
       if (res.summary) output.appendLine(`\n${res.summary}`);
       for (const f of res.findings) {
         const at = f.line ? ` (line ${f.line})` : '';
@@ -497,7 +512,7 @@ async function explainFile(uri?: vscode.Uri) {
         if (f.remediationText) output.appendLine(`  fix: ${f.remediationText}`);
       }
       output.show(true);
-      vscode.window.showInformationMessage(`Shomra: ${res.summary || `${res.findings.length} finding(s) explained`} - see Output → Shomra.`);
+      vscode.window.showInformationMessage(`NoFly: ${res.summary || `${res.findings.length} finding(s) explained`} - see Output → NoFly.`);
     },
   );
 }
@@ -579,22 +594,22 @@ function offsetToPos(text: string, offset: number): { line: number; character: n
 
 function setStatus(blocked: number, flagged: number, total: number) {
   if (blocked) {
-    status.text = `$(error) Shomra: ${blocked}`;
+    status.text = `$(error) NoFly: ${blocked}`;
     status.tooltip = `${blocked} blocked · ${flagged} flagged of ${total} - click to re-check`;
     status.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
   } else if (flagged) {
-    status.text = `$(warning) Shomra: ${flagged}`;
+    status.text = `$(warning) NoFly: ${flagged}`;
     status.tooltip = `${flagged} flagged of ${total} - click to re-check`;
     status.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
   } else {
-    status.text = '$(shield) Shomra';
+    status.text = '$(shield) NoFly';
     status.tooltip = total ? `${total} artifact(s) clean - click to re-check` : 'AI-security gate - click to check the workspace';
     status.backgroundColor = undefined;
   }
   status.show();
 }
 
-class ShomraFixProvider implements vscode.CodeActionProvider {
+class NoFlyFixProvider implements vscode.CodeActionProvider {
   provideCodeActions(
     document: vscode.TextDocument,
     _range: vscode.Range,
@@ -604,12 +619,12 @@ class ShomraFixProvider implements vscode.CodeActionProvider {
     if (!mine.length) return;
 
     if (isArtifact(document.fileName)) {
-      const fix = new vscode.CodeAction('Shomra: Fix this file (AI)', vscode.CodeActionKind.QuickFix);
-      fix.command = { command: 'shomra.fixFile', title: 'Shomra: Fix this file', arguments: [document.uri] };
+      const fix = new vscode.CodeAction('NoFly: Fix this file (AI)', vscode.CodeActionKind.QuickFix);
+      fix.command = { command: 'nofly.fixFile', title: 'NoFly: Fix this file', arguments: [document.uri] };
       fix.diagnostics = mine;
       fix.isPreferred = true;
-      const explain = new vscode.CodeAction('Shomra: Explain findings (AI)', vscode.CodeActionKind.QuickFix);
-      explain.command = { command: 'shomra.explainFile', title: 'Shomra: Explain findings', arguments: [document.uri] };
+      const explain = new vscode.CodeAction('NoFly: Explain findings (AI)', vscode.CodeActionKind.QuickFix);
+      explain.command = { command: 'nofly.explainFile', title: 'NoFly: Explain findings', arguments: [document.uri] };
       explain.diagnostics = mine;
       return [fix, explain];
     }
@@ -620,22 +635,22 @@ class ShomraFixProvider implements vscode.CodeActionProvider {
       for (const d of mine) {
         const line0 = d.range.start.line;
         if (fixes?.get(line0)?.kwargs.length) {
-          const harden = new vscode.CodeAction('Shomra: Harden this model load…', vscode.CodeActionKind.QuickFix);
-          harden.command = { command: 'shomra.hardenModelLoad', title: 'Harden model load', arguments: [document.uri, line0] };
+          const harden = new vscode.CodeAction('NoFly: Harden this model load…', vscode.CodeActionKind.QuickFix);
+          harden.command = { command: 'nofly.hardenModelLoad', title: 'Harden model load', arguments: [document.uri, line0] };
           harden.diagnostics = [d];
           harden.isPreferred = true;
           actions.push(harden);
         }
         const target = d.code && typeof d.code === 'object' && 'target' in d.code ? (d.code as { target: vscode.Uri }).target : undefined;
         if (target) {
-          const open = new vscode.CodeAction('Shomra: View model in the Model Index', vscode.CodeActionKind.QuickFix);
+          const open = new vscode.CodeAction('NoFly: View model in the Model Index', vscode.CodeActionKind.QuickFix);
           open.command = { command: 'vscode.open', title: 'Open model', arguments: [target] };
           open.diagnostics = [d];
           actions.push(open);
         }
       }
-      const recheck = new vscode.CodeAction('Shomra: Re-check models in this file', vscode.CodeActionKind.QuickFix);
-      recheck.command = { command: 'shomra.checkModelsFile', title: 'Re-check models' };
+      const recheck = new vscode.CodeAction('NoFly: Re-check models in this file', vscode.CodeActionKind.QuickFix);
+      recheck.command = { command: 'nofly.checkModelsFile', title: 'Re-check models' };
       actions.push(recheck);
       return actions;
     }

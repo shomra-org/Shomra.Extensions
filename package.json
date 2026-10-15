@@ -1,6 +1,6 @@
 {
   "name": "shomra",
-  "displayName": "Shomra — AI Security",
+  "displayName": "NoFly — AI Security",
   "description": "Gate and fix AI artifacts (MCP servers, Skills, rules, hooks) and flag known-vulnerable AI models right in your editor. Works in VS Code and Cursor.",
   "version": "0.3.4",
   "publisher": "shomra",
@@ -47,7 +47,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": false,
-      "description": "Shomra runs the local `shomra` CLI, so it only activates in trusted workspaces."
+      "description": "NoFly runs the local `nofly` CLI, so it only activates in trusted workspaces."
     }
   },
   "activationEvents": [
@@ -57,66 +57,66 @@
   "contributes": {
     "commands": [
       {
-        "command": "shomra.checkWorkspace",
+        "command": "nofly.checkWorkspace",
         "title": "Check Workspace",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.checkFile",
+        "command": "nofly.checkFile",
         "title": "Check This File",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.checkModelsFile",
+        "command": "nofly.checkModelsFile",
         "title": "Check AI Models in This File",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.hardenModelLoad",
+        "command": "nofly.hardenModelLoad",
         "title": "Harden AI Model Load",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.fixFile",
+        "command": "nofly.fixFile",
         "title": "Fix This File (AI)",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.explainFile",
+        "command": "nofly.explainFile",
         "title": "Explain Findings (AI)",
-        "category": "Shomra"
+        "category": "NoFly"
       },
       {
-        "command": "shomra.installHook",
+        "command": "nofly.installHook",
         "title": "Install Runtime Firewall",
-        "category": "Shomra"
+        "category": "NoFly"
       }
     ],
     "configuration": {
-      "title": "Shomra",
+      "title": "NoFly",
       "properties": {
-        "shomra.executable": {
+        "nofly.executable": {
           "type": "string",
           "scope": "machine",
-          "default": "shomra",
-          "markdownDescription": "The `shomra` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/Shomra.Agent/shomra.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
+          "default": "nofly",
+          "markdownDescription": "The `nofly` CLI command, or an absolute path. For a repo checkout point it at the script, e.g. `node /path/to/NoFly.Agent/nofly.mjs` — a value ending in `.mjs`/`.js` is run with Node automatically."
         },
-        "shomra.checkOnSave": {
+        "nofly.checkOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "Run Shomra when you save an AI-artifact file (MCP config, Skill, rules, hook, …)."
+          "description": "Run NoFly when you save an AI-artifact file (MCP config, Skill, rules, hook, …)."
         },
-        "shomra.checkOnOpen": {
+        "nofly.checkOnOpen": {
           "type": "boolean",
           "default": true,
-          "description": "Run Shomra when you open OR switch to an AI-artifact file (not only on save)."
+          "description": "Run NoFly when you open OR switch to an AI-artifact file (not only on save)."
         },
-        "shomra.checkModels": {
+        "nofly.checkModels": {
           "type": "boolean",
           "default": true,
-          "description": "Scan source files (Python, notebooks, JS/TS) for AI models you load and flag any that are known-vulnerable in the Shomra Model Index — squiggled on the model-load line, on save and open."
+          "description": "Scan source files (Python, notebooks, JS/TS) for AI models you load and flag any that are known-vulnerable in the NoFly Model Index — squiggled on the model-load line, on save and open."
         },
-        "shomra.checkWorkspaceOnStartup": {
+        "nofly.checkWorkspaceOnStartup": {
           "type": "boolean",
           "default": false,
           "description": "Scan the whole workspace once when the window opens. Off by default so large repos don't pay it on every launch."
