@@ -36,6 +36,7 @@ export function shadowingCommand(
   dir: string,
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  name = 'nofly',
 ): string | null {
   const exts =
     platform === 'win32'
@@ -43,7 +44,7 @@ export function shadowingCommand(
       : [''];
   const p = platform === 'win32' ? path.win32 : path.posix;
   for (const ext of exts) {
-    const candidate = p.join(dir, `shomra${ext.toLowerCase()}`);
+    const candidate = p.join(dir, `${name}${ext.toLowerCase()}`);
     try {
       if (fs.statSync(candidate).isFile()) return candidate;
     } catch {
